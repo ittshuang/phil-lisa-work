@@ -10,4 +10,14 @@ To clone the repo from dropbox (after the config and setup):
 git clone "dropbox:///github/phil-lisa-work"
 ```
 
+Code to check status:
+
+```
+irenetan@TTSHUANG-LT:~/phil-lisa-work$ git remote -v
+dropbox dropbox:///github/phil-lisa-work (fetch)
+dropbox dropbox:///github/phil-lisa-work (push)
+origin  git@github.com:ittshuang/phil-lisa-work.git (fetch)
+origin  git@github.com:ittshuang/phil-lisa-work.git (push)
+```
+
 PS. It's my first time using this method, not so familar but the basic logic of git applies.
