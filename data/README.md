@@ -1,2 +1,2 @@
-# Placeholder of data
+# Placeholder of all data stored in Dropbox
 
