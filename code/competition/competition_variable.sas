@@ -24,7 +24,7 @@ proc sql;
     on b.gvkey = m.gvkey and b.datadate = m.datadate and b.srcdate = m.maxsrcdate
     where a.fic = 'USA' 
       and b.sics1 is not null 
-      and b.stype = 'BUSSEG'
+
       and year(b.datadate) between 2000 and 2021;
 quit;
 proc sort nodupkey data=temp1; by gvkey datadate sid ; run;
