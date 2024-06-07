@@ -33,83 +33,94 @@ def map_industry(code):
             return abbr
     return None
 
-# read data and keep relevant columns: sales are in millions
-comp_seg = pd.read_stata(COMPSEG_FILE)[
-    ['gvkey','fyear','total_sales','sid','stype','snms','emps','seg_sale','SICS1','NAICSS1']
-    ].sort_values(['gvkey','fyear']).reset_index(drop=True)
+def read_compustats_seg():
+    # define the segment division priority
+    priority = {
+        'GEOSEG': 2,
+        'BUSSEG': 1,
+        'OPSEG': 3,
+        'STSEG': 4
+        }
+    
+    # read data and keep relevant columns: sales are in millions
+    comp_seg = pd.read_stata(COMPSEG_FILE)[
+        ['gvkey','fyear','total_sales','sid','stype','snms','emps','seg_sale','SICS1','NAICSS1']
+        ].sort_values(['gvkey','fyear']).reset_index(drop=True)
 
-# Only keep year 2001 to 2009 as the HH data is from 2001 to 2009
-comp_seg = comp_seg[(comp_seg['fyear']<=2009) & (comp_seg['fyear']>=2001)].reset_index(drop=True)
-# only keep one stype based on the priority
-priority = {
-    'GEOSEG': 2,
-    'BUSSEG': 1,
-    'OPSEG': 3,
-    'STSEG': 4
-    }
+    # Only keep year 2001 to 2009 as the HH data is from 2001 to 2009
+    comp_seg = comp_seg[(comp_seg['fyear']<=2009) & (comp_seg['fyear']>=2001)].reset_index(drop=True)
+    
+    # only keep one stype based on the priority
+    comp_seg['priority'] = comp_seg['stype'].map(priority)
+    comp_seg = filter_high_priority(comp_seg)
+    comp_seg['sic2d'] = comp_seg['SICS1'].astype(str).str[:2].astype(int) 
+    comp_seg['SICGRP'] = comp_seg['sic2d'].apply(map_industry)
+    return comp_seg
 
-comp_seg['priority'] = comp_seg['stype'].map(priority)
-comp_seg = filter_high_priority(comp_seg)
+def return_hh_sic():
+    raw_list = []
+    for year in range(2001,2009):
+        if year in range(2001,2005):
+            sitedesc_path = f'data\\hh_dataset\\USA_{year}\\Hist{year}_SITEDESC.txt'
+        else: 
+            sitedesc_path = f'data\\hh_dataset\\USA_{year}\\Hist{year}_sitedesc.txt'
+        # read in site descriptive data
+        raw = pd.read_csv(sitedesc_path, delimiter="\t", encoding='latin1')
+        raw['fyear'] = year
+        cols = ['SITEID','fyear','CORPHDQ','SICCODE','SICGRP',"NAICS"]
+        raw = raw[cols].drop_duplicates(subset=['SITEID'])
+        raw.columns = ['siteid','fyear','corphdq','siccode','SICGRP','NAICSS1']
+        raw_list.append(raw)
+    sic_final = pd.concat(raw_list).reset_index(drop=True)
+    return sic_final
 
-# read processed hh_site data
-hh_site = pd.read_stata(HH_FILE)[
-    ['gvkey','year','corpid','siteid','emple','reven','avg_reven'] # from documentation: reven is in millions
-    ].sort_values(['gvkey','year']).reset_index(drop=True)
+def read_hh_site():
+    # read processed hh_site data
+    hh_site = pd.read_stata(HH_FILE)[
+        ['gvkey','year','corpid','siteid','emple','reven','avg_reven'] # from documentation: reven is also in millions
+        ].sort_values(['gvkey','year']).reset_index(drop=True)
+
+    # No industry for this processed industry data - add industry data from the raw data
+    # add sic code 
+    hh_sic = return_hh_sic()
+    hh_site.rename(columns={'year':'fyear'}, inplace=True)
+    # merge with hh_site sic code
+    hh_site = hh_site.merge(hh_sic, on=['siteid','fyear'], how='left' )
+    hh_site['sic2d'] = hh_site['siccode'].astype(str).str[:2]
+    hh_site['sic2d'] = pd.to_numeric(hh_site['sic2d'], errors='coerce')
+    hh_site = hh_site.dropna(subset=['sic2d'])
+    hh_site['sic2d'] = hh_site['sic2d'].astype(int)
+    return hh_site
+
+def main():
+    comp_seg = read_compustats_seg()
+    hh_site = read_hh_site()
+
+    # group sic2d for compustats data
+    comp_seg_ind_group = comp_seg.groupby(['fyear','gvkey','sic2d']).agg({"sid":list, 'seg_sale':'sum', 'emps':'sum'}).reset_index().rename(columns={'SICS1':'siccode'})
+    hh_site_group = hh_site.groupby(['fyear','gvkey','sic2d']).agg({"siteid":list, 'reven':'sum','emple':'sum'}).reset_index()
+
+    result = comp_seg_ind_group.merge(hh_site_group, on=['fyear','gvkey','sic2d'],how='outer').sort_values(['gvkey','fyear','sic2d'])
+    result['SICGRP'] = result['sic2d'].apply(map_industry)
+    cols = ['fyear','gvkey','sic2d','SICGRP','sid','seg_sale','emps','siteid','reven','emple']
+    result = result[cols]
+    result.columns = ['fyear','gvkey','sic2d','SICGRP','seg_id','seg_sale','seg_emps','site_id','site_reven','site_emple']
+    result_high = result.dropna(subset=['seg_id','site_id'])
+    result.to_csv(r'data\hh_dataset\hh_comp_match_sic2d.csv', index=False)
+    result_high.to_csv(r'data\hh_dataset\hh_comp_match_sic2d_high.csv', index=False)
+    
+    # group SICGRP for compustats data
+    comp_seg_ind_group2 = comp_seg.groupby(['fyear','gvkey','SICGRP']).agg({"sid":list, 'seg_sale':'sum', 'emps':'sum'}).reset_index().rename(columns={'SICS1':'siccode'})
+    hh_site_group2 = hh_site.groupby(['fyear','gvkey','SICGRP']).agg({"siteid":list, 'reven':'sum','emple':'sum'}).reset_index()
+
+    result2 = comp_seg_ind_group2.merge(hh_site_group2, on=['fyear','gvkey','SICGRP'],how='outer').sort_values(['gvkey','fyear'])
+    cols = ['fyear','gvkey','SICGRP','sid','seg_sale','emps','siteid','reven','emple']
+    result2 = result2[cols]
+    result2.columns = ['fyear','gvkey','SICGRP','seg_id','seg_sale','seg_emps','site_id','site_reven','site_emple']
+    result2_high = result2.dropna(subset=['seg_id','site_id'])
+    result2.to_csv(r'data\hh_dataset\hh_comp_match_sicgrp.csv', index=False)
+    result2_high.to_csv(r'data\hh_dataset\hh_comp_match_sicgrp_high.csv', index=False)
+    
 
 
-# No industry for this processed industry data - add 2004 data from the raw data
-# start from raw hh 2004 data - add sic code 
-raw_2004 = pd.read_csv(r'data\hh_dataset\USA_2004\Hist2004_SITEDESC.txt', delimiter="\t", encoding='latin1')
-cols = ['SITEID','CORPHDQ','SICCODE','SICGRP',"NAICS"]
-raw_2004 = raw_2004[cols]
-raw_2004.columns = ['siteid','corphdq','siccode','SICGRP','NAICSS1']
-
-# only look at 2004 data
-hh_site_2004 = hh_site[hh_site['year']==2004]
-# link with hh_site 2004 data
-hh_site_2004 = hh_site_2004.merge(raw_2004, on='siteid', how='left' )
-hh_site_2004['sic2d'] = hh_site_2004['siccode'].astype(str).str[:2].astype(int) 
-
-
-# map ind group for compustats data
-comp_seg_2004 = comp_seg[comp_seg['fyear']==2004]
-comp_seg_2004['sic2d'] = comp_seg_2004['SICS1'].astype(str).str[:2].astype(int) 
-comp_seg_2004['SICGRP'] = comp_seg_2004['sic2d'].apply(map_industry)
-
-comp_seg_2004_ind_group = comp_seg_2004.groupby(['gvkey','sic2d']).agg({"sid":list}).reset_index().rename(columns={'SICS1':'siccode'})
-hh_site_2004_group = hh_site_2004.groupby(['gvkey','sic2d']).agg({"siteid":list}).reset_index()
-
-result = comp_seg_2004_ind_group.merge(hh_site_2004_group, on=['gvkey','sic2d'],how='outer').sort_values(['gvkey','sic2d'])
-result['SICGRP'] = result['sic2d'].apply(map_industry)
-result.to_csv(r'data/hh_dataset/hh_comp_match_sic2d_2004.csv', index=False)
-
-'''
-# Average to firm-site or firm-segment level
-hh_site = hh_site.groupby(['gvkey', 'siteid']).agg({'emple':'mean', 'reven':'mean'}).reset_index().sort_values(['gvkey','reven'])
-comp_seg = comp_seg.groupby(['gvkey', 'sid']).agg({'emps':'mean', 'seg_sale':'mean'}).reset_index().sort_values(['gvkey','seg_sale'])
-
-
-# Create bins 
-hh_site['emple_bin'] = pd.cut(hh_site['emple'], bins=[0, 50, 100, 200, 500, 1000], labels=['0-50', '50-100', '100-200', '200-500', '500+'])
-hh_site['reven_bin'] = pd.cut(hh_site['reven'], bins=[0, 50, 100, 200, 500, 1000], labels=['0-50', '50-100', '100-200', '200-500', '500+'])
-
-# Create bins for segment sales in comp_seg
-comp_seg['seg_sale_bin'] = pd.cut(comp_seg['seg_sale'], bins=[0, 50, 100, 200, 500, 1000], labels=['0-50', '50-100', '100-200', '200-500', '500+'])
-comp_seg['emps_bin'] = pd.cut(comp_seg['emps'], bins=[0, 50, 100, 200, 500, 1000], labels=['0-50', '50-100', '100-200', '200-500', '500+'])
-'''
-# 2nd data: there are siteid in this df that are missing the HH_FILE1... (ask lisa about this?)
-'''
-hh_site2 = pd.read_stata(HH_FILE2)[
-    ['gvkey','site_year','siteid',
-     'zipcode', 'county',
-     'sic3', 'siccode', 'naics3', 'naics',]
-    ].sort_values(['gvkey', 'site_year']).reset_index(drop=True)
- '''
-
-
-# merge the two
-#hh_site = hh_site.merge(hh_site2,
-#                        left_on=['siteid','year'],
-#                        right_on=['siteid', 'site_year'],
-#                        how='left'
-#                        ).dropna(subset='siccode').reset_index(drop=True) 
+main()
