@@ -3,9 +3,10 @@
 import pandas as pd 
 import os
 import numpy as np
-
+from tqdm import tqdm
 COMPSEG_FILE = r'data\firm_info\compustats_segment_00_21.dta'
 HH_FILE = r'data\hh_dataset\publicfirm_site.dta'
+HH_industry = r'data\hh_dataset\hh_industry.csv'
 #HH_FIL2E = r"data\hh_dataset\2001_2009_site_clean_data.dta"
 
 
@@ -61,7 +62,7 @@ def read_compustats_seg():
 
 def return_hh_sic():
     raw_list = []
-    for year in range(2001,2009):
+    for year in tqdm(range(2001,2009)):
         if year in range(2001,2005):
             sitedesc_path = f'data\\hh_dataset\\USA_{year}\\Hist{year}_SITEDESC.txt'
         else: 
@@ -79,7 +80,8 @@ def return_hh_sic():
 def read_hh_site():
     # read processed hh_site data
     hh_site = pd.read_stata(HH_FILE)[
-        ['gvkey','year','corpid','siteid','emple','reven','avg_reven'] # from documentation: reven is also in millions
+        ['gvkey','year','corpid','siteid','emple','reven','avg_reven',
+         'internet','intranet', 'intranet_MS', 'totpc', 'ahq', 'distance_to_hq', 'avg_pc',] # from documentation: reven is also in millions
         ].sort_values(['gvkey','year']).reset_index(drop=True)
 
     # No industry for this processed industry data - add industry data from the raw data
@@ -92,6 +94,7 @@ def read_hh_site():
     hh_site['sic2d'] = pd.to_numeric(hh_site['sic2d'], errors='coerce')
     hh_site = hh_site.dropna(subset=['sic2d'])
     hh_site['sic2d'] = hh_site['sic2d'].astype(int)
+    hh_site.to_csv(HH_industry, index=False)
     return hh_site
 
 def main():
@@ -100,28 +103,106 @@ def main():
 
     # group sic2d for compustats data
     comp_seg_ind_group = comp_seg.groupby(['fyear','gvkey','sic2d']).agg({"sid":list, 'seg_sale':'sum', 'emps':'sum'}).reset_index().rename(columns={'SICS1':'siccode'})
-    hh_site_group = hh_site.groupby(['fyear','gvkey','sic2d']).agg({"siteid":list, 'reven':'sum','emple':'sum'}).reset_index()
+    # group sic2d and output the sum of the IT variables
+    hh_site_group = hh_site.groupby(
+        ['fyear','gvkey','sic2d']).agg({
+            "siteid":list, 
+            'reven':'sum',
+            'emple':'sum',
+            'internet':'max', # the three are indicator variable so get the max
+            'intranet':'max', 
+            'intranet_MS':'max', 
+            'totpc':'sum', # get the sum for total PC
+            'ahq': 'max', # if  the matched sites includes HQ
+            }).reset_index()
+    
+    # change col name
+    hh_columns = [
+        'fyear',
+        'gvkey',
+        'sic2d',
+        'siteid',
+        'reven_sum',
+        'emple_sum',
+        'internet',
+        'intranet',
+        'intranet_MS',
+        'totpc_sum',
+        'include_hq']
+    hh_site_group.columns = hh_columns
 
     result = comp_seg_ind_group.merge(hh_site_group, on=['fyear','gvkey','sic2d'],how='outer').sort_values(['gvkey','fyear','sic2d'])
     result['SICGRP'] = result['sic2d'].apply(map_industry)
-    cols = ['fyear','gvkey','sic2d','SICGRP','sid','seg_sale','emps','siteid','reven','emple']
+    # change name of columns
+    cols = ['fyear',
+            'gvkey',
+            'sic2d',
+            'SICGRP',
+            'sid',
+            'seg_sale',
+            'emps',
+            'siteid',
+            'reven_sum',
+            'emple_sum',
+            'internet',
+            'intranet',
+            'intranet_MS',
+            'totpc_sum',
+            'include_hq']
+    
     result = result[cols]
-    result.columns = ['fyear','gvkey','sic2d','SICGRP','seg_id','seg_sale','seg_emps','site_id','site_reven','site_emple']
-    result_high = result.dropna(subset=['seg_id','site_id'])
+    result.columns = ['fyear','gvkey','sic2d','SICGRP','seg_id','seg_sale','seg_emps',
+                      'site_id','site_reven_sum','site_emple_sum','internet','intranet','intranet_MS','totpc_sum','include_hq']
+
     result.to_csv(r'data\hh_dataset\hh_comp_match_sic2d.csv', index=False)
-    result_high.to_csv(r'data\hh_dataset\hh_comp_match_sic2d_high.csv', index=False)
     
     # group SICGRP for compustats data
     comp_seg_ind_group2 = comp_seg.groupby(['fyear','gvkey','SICGRP']).agg({"sid":list, 'seg_sale':'sum', 'emps':'sum'}).reset_index().rename(columns={'SICS1':'siccode'})
-    hh_site_group2 = hh_site.groupby(['fyear','gvkey','SICGRP']).agg({"siteid":list, 'reven':'sum','emple':'sum'}).reset_index()
+    hh_site_group2 = hh_site.groupby(['fyear','gvkey','SICGRP']).agg({
+            "siteid":list, 
+            'reven':'sum',
+            'emple':'sum',
+            'internet':'max', # the three are indicator variable so get the max
+            'intranet':'max', 
+            'intranet_MS':'max', 
+            'totpc':'sum', # get the sum for total PC
+            'ahq': 'max', # if  the matched sites includes HQ
+            }).reset_index()
+    
+    hh_columns2 = [
+        'fyear',
+        'gvkey',
+        'SICGRP',
+        'siteid',
+        'reven_sum',
+        'emple_sum',
+        'internet',
+        'intranet',
+        'intranet_MS',
+        'totpc_sum',
+        'include_hq']
+    hh_site_group2.columns = hh_columns2
 
     result2 = comp_seg_ind_group2.merge(hh_site_group2, on=['fyear','gvkey','SICGRP'],how='outer').sort_values(['gvkey','fyear'])
-    cols = ['fyear','gvkey','SICGRP','sid','seg_sale','emps','siteid','reven','emple']
+    cols = ['fyear',
+        'gvkey',
+        'SICGRP',
+        'sid',
+        'seg_sale',
+        'emps',
+        'siteid',
+        'reven_sum',
+        'emple_sum',
+        'internet',
+        'intranet',
+        'intranet_MS',
+        'totpc_sum',
+        'include_hq']
     result2 = result2[cols]
-    result2.columns = ['fyear','gvkey','SICGRP','seg_id','seg_sale','seg_emps','site_id','site_reven','site_emple']
-    result2_high = result2.dropna(subset=['seg_id','site_id'])
+    result2.columns = ['fyear','gvkey','SICGRP','seg_id','seg_sale','seg_emps','site_id','site_reven_sum','site_emple_sum',
+                       'internet','intranet','intranet_MS','totpc_sum','include_hq']
+
     result2.to_csv(r'data\hh_dataset\hh_comp_match_sicgrp.csv', index=False)
-    result2_high.to_csv(r'data\hh_dataset\hh_comp_match_sicgrp_high.csv', index=False)
     
 
 
