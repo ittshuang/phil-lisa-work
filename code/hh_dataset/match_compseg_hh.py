@@ -44,11 +44,13 @@ def read_compustats_seg():
     
     # read data and keep relevant columns: sales are in millions
     comp_seg = pd.read_stata(COMPSEG_FILE)[
-        ['gvkey','fyear','total_sales','sid','stype','snms','emps','seg_sale','SICS1','NAICSS1']
+        ['gvkey','fyear','total_sales','sid','stype','snms','SICS1','NAICSS1',
+         'emps','seg_sale','seg_ops', 'seg_oibdps', 'seg_rds', 'seg_capxs',
+       'seg_ias', 'seg_ppe']
         ].sort_values(['gvkey','fyear']).reset_index(drop=True)
-
+    
     # Only keep year 2001 to 2009 as the HH data is from 2001 to 2009
-    comp_seg = comp_seg[(comp_seg['fyear']<=2009) & (comp_seg['fyear']>=2001)].reset_index(drop=True)
+    comp_seg = comp_seg[(comp_seg['fyear']<=2008) & (comp_seg['fyear']>=2001)].reset_index(drop=True)
     
     # only keep one stype based on the priority
     comp_seg['priority'] = comp_seg['stype'].map(priority)
