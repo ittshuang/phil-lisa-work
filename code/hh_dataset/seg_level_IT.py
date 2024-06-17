@@ -3,7 +3,57 @@
 import pandas as pd
 import ast
 
+COMPSEG_FILE = r'data\firm_info\compustats_segment_00_21.dta'
 match_file = r'data\hh_dataset\hh_comp_match_sic2d.csv'
+
+industry_map = {
+    range(1, 10): "AG-M-C",
+    range(10, 15): "AG-M-C",
+    range(15, 18): "AG-M-C",
+    range(20, 40): "MANUF",
+    range(40, 50): "TR-UTL",
+    range(50, 52): "WHL-RT",
+    range(52, 60): "WHL-RT",
+    range(60, 68): "F-I-RE",
+    range(70, 90): "SVCS",
+    range(91, 100): "GOVT"
+}
+
+def map_industry(code):
+    for code_range, abbr in industry_map.items():
+        if code in code_range:
+            return abbr
+    return None
+
+def filter_high_priority(df):
+    min_priority = df.groupby(['gvkey', 'fyear'])['priority'].transform('min')
+    return df[df['priority'] == min_priority]
+
+def read_compustats_seg():
+    # define the segment division priority
+    priority = {
+        'GEOSEG': 2,
+        'BUSSEG': 1,
+        'OPSEG': 3,
+        'STSEG': 4
+        }
+    
+    # read data and keep relevant columns: sales are in millions
+    comp_seg = pd.read_stata(COMPSEG_FILE)[
+        ['gvkey','fyear','total_sales','sid','stype','snms','SICS1','NAICSS1',
+         'emps','seg_sale','seg_ops', 'seg_oibdps', 'seg_rds', 'seg_capxs',
+       'seg_ias', 'seg_ppe']
+        ].sort_values(['gvkey','fyear']).reset_index(drop=True)
+    
+    # Only keep year 2001 to 2009 as the HH data is from 2001 to 2009
+    comp_seg = comp_seg[(comp_seg['fyear']<=2008) & (comp_seg['fyear']>=2001)].reset_index(drop=True)
+    
+    # only keep one stype based on the priority
+    comp_seg['priority'] = comp_seg['stype'].map(priority)
+    comp_seg = filter_high_priority(comp_seg)
+    comp_seg['sic2d'] = comp_seg['SICS1'].astype(str).str[:2].astype(int) 
+    comp_seg['SICGRP'] = comp_seg['sic2d'].apply(map_industry)
+    return comp_seg
 
 df = pd.read_csv(match_file)
 
@@ -28,7 +78,21 @@ expanded_df['has_match'] = (~expanded_df.site_id.isna()).astype(int)
 expanded_df['site_id'] = expanded_df['site_id'].apply(lambda x: ast.literal_eval(x) if pd.notna(x) else x)
 expanded_df['site_count'] = expanded_df['site_id'].apply(lambda x: len(x) if isinstance(x, list) else 0)
 
-# export 
+
 expanded_df['site_id'] = expanded_df['site_id'].astype(str)
 expanded_df = expanded_df.reset_index(drop=True)
+cols = ['fyear', 'gvkey', 'seg_id', 
+       'site_id', 'site_reven_sum', 'site_emple_sum', 'internet', 'intranet',
+       'intranet_MS', 'totpc_sum', 'include_hq', 'has_match', 'site_count']
+expanded_df = expanded_df[cols]
+
+# Add segment level variable
+comp_seg=read_compustats_seg()
+comp_seg.rename(columns={'sid': 'seg_id'}, inplace=True)
+comp_seg.gvkey = comp_seg.gvkey.astype(int)
+
+expanded_df=expanded_df.merge(comp_seg, on=['fyear', 'gvkey', 'seg_id'], how='left').reset_index(drop=True)
+expanded_df=expanded_df.drop(columns=['priority'])
+
+# export 
 expanded_df.to_stata(r'data\hh_dataset\seg_site_match.dta',version=117)
