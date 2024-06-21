@@ -4,11 +4,17 @@ import pandas as pd
 import os
 import numpy as np
 from tqdm import tqdm
+
+# INPUTS
 COMPSEG_FILE = r'data\firm_info\compustats_segment_00_21.dta'
 HH_FILE = r'data\hh_dataset\publicfirm_site.dta'
 HH_industry = r'data\hh_dataset\hh_industry.csv'
+
 #HH_FIL2E = r"data\hh_dataset\2001_2009_site_clean_data.dta"
 
+# OUTPUTS - store it to the new folder
+OUTPUT_SIC2d = r'data\hh_dataset\match\hh_comp_match_sic2d.csv'
+OUTPUT_SIC1d = r'data\hh_dataset\match\hh_comp_match_sic1d.csv'
 
 industry_map = {
     range(1, 10): "AG-M-C",
@@ -57,6 +63,7 @@ def read_compustats_seg():
     comp_seg['priority'] = comp_seg['stype'].map(priority)
     comp_seg = filter_high_priority(comp_seg)
     comp_seg['sic2d'] = comp_seg['SICS1'].astype(str).str[:2].astype(int) 
+    comp_seg['sic1d'] = comp_seg['SICS1'].astype(str).str[:1].astype(int) 
     comp_seg['SICGRP'] = comp_seg['sic2d'].apply(map_industry)
     return comp_seg
 
@@ -83,7 +90,6 @@ def read_hh_site():
         ['gvkey','year','corpid','siteid','emple','reven','avg_reven',
          'internet','intranet', 'intranet_MS', 'totpc', 'ahq', 'distance_to_hq', 'avg_pc',] # from documentation: reven is also in millions
         ].sort_values(['gvkey','year']).reset_index(drop=True)
-
     # No industry for this processed industry data - add industry data from the raw data
     # add sic code 
     hh_sic = return_hh_sic()
@@ -91,21 +97,65 @@ def read_hh_site():
     # merge with hh_site sic code
     hh_site = hh_site.merge(hh_sic, on=['siteid','fyear'], how='left' )
     hh_site['sic2d'] = hh_site['siccode'].astype(str).str[:2]
+    hh_site['sic1d'] = hh_site['siccode'].astype(str).str[:1]
+    
     hh_site['sic2d'] = pd.to_numeric(hh_site['sic2d'], errors='coerce')
     hh_site = hh_site.dropna(subset=['sic2d'])
     hh_site['sic2d'] = hh_site['sic2d'].astype(int)
-    hh_site.to_csv(HH_industry, index=False)
+    
+    hh_site['sic1d'] = pd.to_numeric(hh_site['sic1d'], errors='coerce')
+    hh_site = hh_site.dropna(subset=['sic1d'])
+    hh_site['sic1d'] = hh_site['sic1d'].astype(int)
+    #hh_site.to_csv(HH_industry, index=False)
     return hh_site
 
-def main():
+def create_revenue_bin(df, col):
+    '''
+    Function to create revenue bins for sales columns in compustat segment
+    and HH site data
+    '''
+    if df[col].min() >= 0:
+        return pd.cut(df[col], bins=[df[col].min(), 50, 100, 200, 500,1000, df[col].max()], labels=['0-50', '50-100', '100-200', '200-500', '500-1000','1000+'])
+    else:
+        return pd.cut(df[col], bins=[df[col].min(), 0, 50, 100, 200, 500,1000, df[col].max()], labels=['< 0','0-50', '50-100', '100-200', '200-500', '500-1000','1000+'])
+
+
+def determine_match_type(row):
+    '''Return the matching type'''
+    
+    if type(row['seg_id']) == float or type(row['site_id']) == float:
+        return np.nan
+    else:
+        seg_len = len(row['seg_id'])
+        site_len = len(row['site_id'])
+        
+        if seg_len == 1 and site_len == 1:
+            return 'one-to-one'
+        elif seg_len == 1 and site_len > 1:
+            return 'one-to-many'
+        elif seg_len > 1 and site_len == 1:
+            return 'many-to-one'
+        elif seg_len > 1 and site_len > 1:
+            return 'many-to-many'
+
+def main(match_by,
+         output):
+    # read input data
     comp_seg = read_compustats_seg()
     hh_site = read_hh_site()
 
-    # group sic2d for compustats data
-    comp_seg_ind_group = comp_seg.groupby(['fyear','gvkey','sic2d']).agg({"sid":list, 'seg_sale':'sum', 'emps':'sum'}).reset_index().rename(columns={'SICS1':'siccode'})
+    # group match_by for compustats data
+    comp_seg_ind_group = comp_seg.groupby(['fyear','gvkey',match_by]).agg(
+        {"sid":list, 
+         'seg_sale':'sum',
+         'emps':'sum'}).reset_index()
+    
+    # create revenue bin
+    comp_seg_ind_group['seg_sale_bin'] = create_revenue_bin(comp_seg_ind_group, 'seg_sale').astype(str)
+    
     # group sic2d and output the sum of the IT variables
     hh_site_group = hh_site.groupby(
-        ['fyear','gvkey','sic2d']).agg({
+        ['fyear','gvkey',match_by]).agg({
             "siteid":list, 
             'reven':'sum',
             'emple':'sum',
@@ -116,11 +166,13 @@ def main():
             'ahq': 'max', # if  the matched sites includes HQ
             }).reset_index()
     
+    hh_site_group['site_sale_bin'] = create_revenue_bin(hh_site_group, 'reven').astype(str)
+    
     # change col name
     hh_columns = [
         'fyear',
         'gvkey',
-        'sic2d',
+        match_by,
         'siteid',
         'reven_sum',
         'emple_sum',
@@ -128,18 +180,19 @@ def main():
         'intranet',
         'intranet_MS',
         'totpc_sum',
-        'include_hq']
+        'include_hq',
+        'site_sale_bin']
     hh_site_group.columns = hh_columns
 
-    result = comp_seg_ind_group.merge(hh_site_group, on=['fyear','gvkey','sic2d'],how='outer').sort_values(['gvkey','fyear','sic2d'])
-    result['SICGRP'] = result['sic2d'].apply(map_industry)
+    result = comp_seg_ind_group.merge(hh_site_group, on=['fyear','gvkey',match_by],how='outer').sort_values(['gvkey','fyear',match_by])
+    
     # change name of columns
     cols = ['fyear',
             'gvkey',
-            'sic2d',
-            'SICGRP',
+            match_by,
             'sid',
             'seg_sale',
+            'seg_sale_bin',
             'emps',
             'siteid',
             'reven_sum',
@@ -148,62 +201,29 @@ def main():
             'intranet',
             'intranet_MS',
             'totpc_sum',
-            'include_hq']
+            'include_hq',
+            'site_sale_bin']
     
     result = result[cols]
-    result.columns = ['fyear','gvkey','sic2d','SICGRP','seg_id','seg_sale','seg_emps',
-                      'site_id','site_reven_sum','site_emple_sum','internet','intranet','intranet_MS','totpc_sum','include_hq']
+    # rename columns
+    result = result.rename(columns={
+        'sid':'seg_id',
+        'emps':'seg_emps',
+        'siteid': 'site_id',
+        'reven_sum':'site_reven_sum',
+        'emple_sum':'site_emple_sum',
+    })
 
-    result.to_csv(r'data\hh_dataset\hh_comp_match_sic2d.csv', index=False)
+    # create revenue_bin_match indicator 
+    result['revenue_bin_match'] = (result['seg_sale_bin']==result['site_sale_bin']).astype(int)
     
-    # group SICGRP for compustats data
-    comp_seg_ind_group2 = comp_seg.groupby(['fyear','gvkey','SICGRP']).agg({"sid":list, 'seg_sale':'sum', 'emps':'sum'}).reset_index().rename(columns={'SICS1':'siccode'})
-    hh_site_group2 = hh_site.groupby(['fyear','gvkey','SICGRP']).agg({
-            "siteid":list, 
-            'reven':'sum',
-            'emple':'sum',
-            'internet':'max', # the three are indicator variable so get the max
-            'intranet':'max', 
-            'intranet_MS':'max', 
-            'totpc':'sum', # get the sum for total PC
-            'ahq': 'max', # if  the matched sites includes HQ
-            }).reset_index()
+    # create match_type column
+    result['match_type'] = result.apply(determine_match_type, axis=1)
     
-    hh_columns2 = [
-        'fyear',
-        'gvkey',
-        'SICGRP',
-        'siteid',
-        'reven_sum',
-        'emple_sum',
-        'internet',
-        'intranet',
-        'intranet_MS',
-        'totpc_sum',
-        'include_hq']
-    hh_site_group2.columns = hh_columns2
+    result.to_csv(output, index=False)
 
-    result2 = comp_seg_ind_group2.merge(hh_site_group2, on=['fyear','gvkey','SICGRP'],how='outer').sort_values(['gvkey','fyear'])
-    cols = ['fyear',
-        'gvkey',
-        'SICGRP',
-        'sid',
-        'seg_sale',
-        'emps',
-        'siteid',
-        'reven_sum',
-        'emple_sum',
-        'internet',
-        'intranet',
-        'intranet_MS',
-        'totpc_sum',
-        'include_hq']
-    result2 = result2[cols]
-    result2.columns = ['fyear','gvkey','SICGRP','seg_id','seg_sale','seg_emps','site_id','site_reven_sum','site_emple_sum',
-                       'internet','intranet','intranet_MS','totpc_sum','include_hq']
+if __name__ == '__main__':
+    #main(match_by = 'sic2d', output=OUTPUT_SIC2d)
+    main(match_by = 'sic1d',
+         output=OUTPUT_SIC1d)
 
-    result2.to_csv(r'data\hh_dataset\hh_comp_match_sicgrp.csv', index=False)
-    
-
-
-main()
