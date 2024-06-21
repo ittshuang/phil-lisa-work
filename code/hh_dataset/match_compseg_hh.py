@@ -223,7 +223,6 @@ def main(match_by,
     result.to_csv(output, index=False)
 
 if __name__ == '__main__':
-    #main(match_by = 'sic2d', output=OUTPUT_SIC2d)
-    main(match_by = 'sic1d',
-         output=OUTPUT_SIC1d)
+    main(match_by = 'sic2d', output=OUTPUT_SIC2d)
+    main(match_by = 'sic1d', output=OUTPUT_SIC1d)
 
