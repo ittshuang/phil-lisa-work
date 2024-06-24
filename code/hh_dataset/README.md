@@ -25,6 +25,9 @@ Here documents the detailed step to match compustats segment data and HH dataset
 3. for many-to-one, we assign all segments the same value for all variables as the single site. 
 4. for many-to-many, we sum the continuous variable and keep the max of the indicators and assign all segments the same value for all variables as the aggregated value.
 
+
+I also created a column called `revenue_bin_match` to indicate if the aggregated segment-level sales and the aggregated site-level sales are in the same revenue bin (the bins are '0-50', '50-100', '100-200', '200-500', '500-1000','1000+')
+ 
 The master matching file is `data\hh_dataset\hh_comp_match_sic2d.csv`
 
 Some SIC2D matching statistics (which can also be find in issue #3):
